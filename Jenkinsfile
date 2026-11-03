@@ -1,40 +1,48 @@
-import groovy.json.JsonSlurper
-
-def getFtpPublishProfile(def publishProfilesJson) {
-  def pubProfiles = new JsonSlurper().parseText(publishProfilesJson)
-  for (p in pubProfiles)
-    if (p['publishMethod'] == 'FTP')
-      return [url: p.publishUrl, username: p.userName, password: p.userPWD]
-}
-
 node {
-  withEnv(['AZURE_SUBSCRIPTION_ID=<subscription_id>',
-        'AZURE_TENANT_ID=<tenant_id>']) {
+  withEnv([
+    'AZURE_SUBSCRIPTION_ID=6a8d66f3-2ea4-4126-b9e9-05025450edf1',
+    'AZURE_TENANT_ID=41c25965-d8ea-4663-80c1-ad36009c518a',
+    'AZURE_RESOURCE_GROUP=jenkins-get-started-rg',
+    'AZURE_WEBAPP_NAME=songyu-jenkins-calculator-2026'
+  ]) {
     stage('init') {
       checkout scm
     }
-  
+
     stage('build') {
       sh 'mvn clean package'
     }
-  
+
     stage('deploy') {
-      def resourceGroup = '<resource_group>'
-      def webAppName = '<app_name>'
-      // login Azure
-      withCredentials([usernamePassword(credentialsId: '<service_princial>', passwordVariable: 'AZURE_CLIENT_SECRET', usernameVariable: 'AZURE_CLIENT_ID')]) {
-       sh '''
-          az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET -t $AZURE_TENANT_ID
-          az account set -s $AZURE_SUBSCRIPTION_ID
-        '''
+      withCredentials([
+        usernamePassword(
+          credentialsId: 'AzureServicePrincipal',
+          usernameVariable: 'AZURE_CLIENT_ID',
+          passwordVariable: 'AZURE_CLIENT_SECRET'
+        )
+      ]) {
+        try {
+          sh '''
+            set +x
+            az login --service-principal \
+              --username "$AZURE_CLIENT_ID" \
+              --password="$AZURE_CLIENT_SECRET" \
+              --tenant "$AZURE_TENANT_ID" \
+              --output none
+
+            az account set \
+              --subscription "$AZURE_SUBSCRIPTION_ID"
+
+            az webapp deploy \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --src-path target/calculator-1.0.war \
+              --type war
+          '''
+        } finally {
+          sh 'az logout'
+        }
       }
-      // get publish settings
-      def pubProfilesJson = sh script: "az webapp deployment list-publishing-profiles -g $resourceGroup -n $webAppName", returnStdout: true
-      def ftpProfile = getFtpPublishProfile pubProfilesJson
-      // upload package
-      sh "curl -T target/calculator-1.0.war $ftpProfile.url/webapps/ROOT.war -u '$ftpProfile.username:$ftpProfile.password'"
-      // log out
-      sh 'az logout'
     }
   }
 }
